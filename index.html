@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>India Travel Explorer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine/dist/leaflet-routing-machine.css" />
+  <style>
+    body { margin:0; font-family:Arial, sans-serif; display:flex; height:100vh; }
+    #map { flex: 3; }
+    #sidebar {
+      flex: 1; max-width:350px; overflow-y:auto; border-left:2px solid #ddd;
+      padding:10px; background:#fafafa;
+    }
+    .card {
+      background:#fff; border:1px solid #ddd; border-radius:8px;
+      margin-bottom:10px; padding:10px; box-shadow:0 2px 4px rgba(0,0,0,0.1);
+    }
+    .filters { display:flex; flex-wrap:wrap; gap:5px; margin-bottom:10px; }
+    .filters button {
+      padding:5px 10px; border:none; border-radius:5px; cursor:pointer;
+      background:#007bff; color:white;
+    }
+    .filters button:hover { background:#0056b3; }
+    #footer-ad {
+      position:fixed; bottom:0; left:0; right:0; background:#fff;
+      text-align:center; padding:5px; border-top:1px solid #ccc;
+      z-index:1000;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="sidebar">
+    <h2>Places</h2>
+    <div class="filters">
+      <button onclick="fetchPOIs('hotel')">Hotels</button>
+      <button onclick="fetchPOIs('restaurant')">Restaurants</button>
+      <button onclick="fetchPOIs('temple')">Temples</button>
+      <button onclick="fetchPOIs('museum')">Museums</button>
+      <button onclick="fetchPOIs('park')">Parks</button>
+      <button onclick="fetchPOIs('fort')">Forts</button>
+    </div>
+    <button id="useLocation">📍 Use My Location</button>
+    <div id="places-list"></div>
+  </div>
+
+  <div id="footer-ad">
+    <script type="text/javascript">
+      atOptions = {
+        'key' : '8e3033a8d8c6964f8b1bb35a07ae50ca',
+        'format' : 'iframe',
+        'height' : 50,
+        'width' : 320,
+        'params' : {}
+      };
+    </script>
+    <script type="text/javascript" src="//www.highperformanceformat.com/8e3033a8d8c6964f8b1bb35a07ae50ca/invoke.js"></script>
+  </div>
+
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet-routing-machine/dist/leaflet-routing-machine.min.js"></script>
+
+  <script>
+    const map = L.map("map").setView([20.5937, 78.9629], 5); // India center
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/">OSM</a>'
+    }).addTo(map);
+
+    let poiLayer = L.layerGroup().addTo(map);
+    let routingControl;
+    let originCoords, destCoords;
+    let originMarker, destMarker;
+
+    // Distance calculation (Haversine formula)
+    function getDistanceKm(lat1, lon1, lat2, lon2) {
+      const R = 6371; // km
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                Math.cos(lat1 * Math.PI/180) * Math.cos(lat2 * Math.PI/180) *
+                Math.sin(dLon/2) * Math.sin(dLon/2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+      return (R * c).toFixed(1); // km
+    }
+
+    // Fetch POIs dynamically
+    function fetchPOIs(category) {
+      const bounds = map.getBounds();
+      const query = `
+        [out:json][timeout:25];
+        (
+          node["tourism"="${category}"](${bounds.getSouth()},${bounds.getWest()},${bounds.getNorth()},${bounds.getEast()});
+          node["amenity"="${category}"](${bounds.getSouth()},${bounds.getWest()},${bounds.getNorth()},${bounds.getEast()});
+        );
+        out center;
+      `;
+
+      fetch("https://overpass-api.de/api/interpreter", {
+        method: "POST",
+        body: query
+      })
+        .then(res => res.json())
+        .then(data => {
+          poiLayer.clearLayers();
+          document.getElementById("places-list").innerHTML = "";
+          data.elements.forEach(el => {
+            const lat = el.lat || (el.center && el.center.lat);
+            const lon = el.lon || (el.center && el.center.lon);
+            if (!lat || !lon) return;
+            const name = el.tags.name || "Unnamed";
+            const categoryName = category.charAt(0).toUpperCase() + category.slice(1);
+
+            // Distance from origin
+            let distanceText = "";
+            if (originCoords) {
+              const dist = getDistanceKm(originCoords[0], originCoords[1], lat, lon);
+              distanceText = `<p><b>Distance:</b> ${dist} km</p>`;
+            }
+
+            const marker = L.marker([lat, lon]).addTo(poiLayer);
+            marker.bindPopup(`<b>${name}</b><br>${categoryName}<br>${distanceText}
+              <button onclick="setDestination([${lat},${lon}], '${name}')">Go Here</button>`);
+
+            // Sidebar card
+            const card = document.createElement("div");
+            card.className = "card";
+            card.innerHTML = `<h3>${name}</h3>
+              <p>${categoryName}</p>
+              ${distanceText}
+              <button onclick="setDestination([${lat},${lon}], '${name}')">Get Route</button>`;
+            document.getElementById("places-list").appendChild(card);
+          });
+        })
+        .catch(err => console.error(err));
+    }
+
+    // Set destination and route
+    function setDestination(coords, name) {
+      destCoords = coords;
+      if (destMarker) map.removeLayer(destMarker);
+      destMarker = L.marker(coords).addTo(map).bindPopup(name).openPopup();
+
+      if (originCoords) getRoute(originCoords, destCoords, name);
+    }
+
+    // Routing
+    function getRoute(start, end, placeName) {
+      if (routingControl) map.removeControl(routingControl);
+      routingControl = L.Routing.control({
+        waypoints: [L.latLng(start[0], start[1]), L.latLng(end[0], end[1])],
+        routeWhileDragging: false,
+      }).addTo(map);
+
+      // Google Maps link
+      const gmapsUrl = `https://www.google.com/maps/dir/?api=1&origin=${start[0]},${start[1]}&destination=${end[0]},${end[1]}&travelmode=driving`;
+      const linkBtn = document.createElement("a");
+      linkBtn.href = gmapsUrl;
+      linkBtn.target = "_blank";
+      linkBtn.innerText = "Open in Google Maps ↗";
+      linkBtn.style.display = "block";
+      linkBtn.style.margin = "10px 0";
+      document.getElementById("places-list").appendChild(linkBtn);
+    }
+
+    // Geolocation
+    document.getElementById("useLocation").addEventListener("click", () => {
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(pos => {
+          const lat = pos.coords.latitude, lon = pos.coords.longitude;
+          if (originMarker) map.removeLayer(originMarker);
+          originMarker = L.marker([lat, lon], {color: "blue"}).addTo(map).bindPopup("You are here").openPopup();
+          originCoords = [lat, lon];
+          map.setView([lat, lon], 13);
+
+          if (destCoords) getRoute(originCoords, destCoords);
+        });
+      } else {
+        alert("Geolocation not supported.");
+      }
+    });
+  </script>
+</body>
+</html>
